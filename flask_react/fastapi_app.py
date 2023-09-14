@@ -1,6 +1,6 @@
 import os
 import uvicorn
-from fastapi import BackgroundTasks, FastAPI
+from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from werkzeug.utils import secure_filename
 from typing import Any, Dict, List, Tuple
@@ -61,10 +61,9 @@ def download_file(url, filename, save_dir):
     # 返回已经下载的文件的完整路径
     return save_path
 
-async def query_worker(key, question, userData):
+async def query_worker(key, question, callback_url, userData):
     print(key)
     print(question);
-    url = "http://test-api.qi.work/tpd/api/aiWechatMessage/message/callback"
 
     response = await index_server.query_index(key, question)
     response_json = {
@@ -75,7 +74,7 @@ async def query_worker(key, question, userData):
     now = datetime.datetime.now()
     print(f"post = {now}:{json_data}")
     headers = {"Content-Type": "application/json;charset=utf-8"}
-    response = requests.post(url, data=json_data, headers=headers)
+    response = requests.post(callback_url, data=json_data, headers=headers)
     print(response)
         
 @app.post("/query")
@@ -100,11 +99,15 @@ async def query_index(data: dict, background_tasks: BackgroundTasks):
     question = data['question']
     if question is None:
         return "No question found, please include a ?question=blah parameter in the URL", 400
+    
+    callback = data['callback']
+    if callback is None:
+        raise HTTPException(status_code=400, detail="Invalid callback data!")
 
     if use_global_api:
         key = openai_api_key
 
-    background_tasks.add_task(query_worker, key, question, user_data)
+    background_tasks.add_task(query_worker, key, question, callback, user_data)
                     
     response_json = {
         "errorCode": 0,
@@ -145,9 +148,7 @@ async def query_index_sync(data: dict):
     headers = {"Content-Type": "application/json;charset=utf-8"}
     return JSONResponse(content=response_json, status_code=200, headers=headers)
 
-async def chat_worker(key, question, history, userData):
-    url = "http://test-api.qi.work/tpd/api/aiWechatMessage/message/callback"
-
+async def chat_worker(key, question, history, callback_url, userData):
     response = await index_server.chat_index(key, question, history)
     response_json = {
         "answer": str(response)
@@ -157,7 +158,7 @@ async def chat_worker(key, question, history, userData):
     now = datetime.datetime.now()
     print(f"post = {now}:{json_data}")
     headers = {"Content-Type": "application/json;charset=utf-8"}
-    response = requests.post(url, data=json_data, headers=headers)
+    response = requests.post(callback_url, data=json_data, headers=headers)
     print(response)
     
 @app.post("/chat")
@@ -182,6 +183,10 @@ async def chat_index_ex(data: dict, background_tasks: BackgroundTasks):
     if question is None:
         return "No question found, please include a ?question=blah parameter in the URL", 400
     
+    callback = data['callback']
+    if callback is None:
+        raise HTTPException(status_code=400, detail="Invalid callback data!")
+    
     messages = data['messages']            
     chathistory = chat_history(messages)
 
@@ -191,7 +196,7 @@ async def chat_index_ex(data: dict, background_tasks: BackgroundTasks):
     print(key)
     print(question)
     
-    background_tasks.add_task(chat_worker, key, question, chathistory, user_data)
+    background_tasks.add_task(chat_worker, key, question, chathistory, callback, user_data)
 
     response_json = {
         "errorCode": 0,
@@ -250,10 +255,9 @@ def delete_index(doc_id: str):
     index_server.delete_from_index(doc_id)
     return "File deleted!", 200
 
-def upload_chunk_worker(companyId, chunks: List):
+def upload_chunk_worker(companyId, callback_url, chunks: List):
     import requests
     import json
-    url = "http://test-api.qi.work/tpd/api/knowledgeRobotTrain/callback"
     for chunk in chunks:
         chatgptKey = openai_api_key if use_global_api else chunk['chatgptKey']
         doc_id = chunk['doc_id'] if 'doc_id' in chunk else None
@@ -270,7 +274,7 @@ def upload_chunk_worker(companyId, chunks: List):
         json_data = json.dumps(chunk)
         print(f"post = {json_data}")
         headers = {"Content-Type": "application/json;charset=utf-8"}
-        response = requests.post(url, data=json_data, headers = headers)
+        response = requests.post(callback_url, data=json_data, headers = headers)
         print(response)
 
 
@@ -284,8 +288,12 @@ async def upload_chunk(data: dict, background_tasks: BackgroundTasks):
     if chunks is None:
         return "No chunk found, please include a ?chunk=List parameter in the URL", 400
     print(f"recv_chunks = {chunks}")
+
+    callback = data['callback']
+    if callback is None:
+        raise HTTPException(status_code=400, detail="Invalid callback data!")
         
-    background_tasks.add_task(upload_chunk_worker, companyId, chunks)
+    background_tasks.add_task(upload_chunk_worker, companyId, callback, chunks)
     
     response_json = {
         "errorCode":0,
@@ -295,10 +303,9 @@ async def upload_chunk(data: dict, background_tasks: BackgroundTasks):
     return JSONResponse(content=response_json, status_code=200)
 
 
-async def upload_file_worker(companyId, files: List):
+async def upload_file_worker(companyId, callback_url, files: List):
     import requests
     import json
-    callback_url = "http://test-api.qi.work/tpd/api/knowledgeRobotTrain/callback"
     save_dir = "/root/documents"
     for file in files:
         key = file['chatgptKey']
@@ -353,7 +360,10 @@ async def upload_file(data: dict, background_tasks: BackgroundTasks):
         return "No files found, please include a ?files=List parameter in the URL", 400
     print(f"files = {files}")
 
-    background_tasks.add_task(upload_file_worker, companyId, files)
+    callback = data['callback']
+    if callback is None:
+        raise HTTPException(status_code=400, detail="Invalid callback data!")
+    background_tasks.add_task(upload_file_worker, companyId, callback, files)
     
     response_json = {
         "errorCode":0,
